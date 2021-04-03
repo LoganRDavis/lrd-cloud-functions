@@ -1,0 +1,18 @@
+{
+	"name": "service-checker",
+	"version": "1.0.0",
+	"scripts": {
+		"start": "functions-framework --target=checkServices"
+	},
+	"dependencies": {
+		"@sendgrid/mail": "^6.5.5",
+		"axios": "^0.21.1",
+		"dotenv": "^8.2.0",
+		"ping": "^0.4.0",
+		"pino": "^6.8.0"
+	},
+	"devDependencies": {
+		"@google-cloud/functions-framework": "^1.2.1",
+		"pino-pretty": "^4.3.0"
+	}
+}
