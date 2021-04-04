@@ -28,7 +28,7 @@ axiosRetry(axios, {
     },
     retryDelay: (retryCount) => {
         logger.warn(`retry attempt: ${retryCount}`);
-        return retryCount * 2000;
+        return retryCount * 1000;
     },
 });
 
@@ -80,11 +80,17 @@ async function getEndpoint(service) {
     service.failed = false;
 
     logger.info(`getEndpoint: ${service.endpoint}:${service.port}`);
+
+    let source = axios.CancelToken.source();
+    setTimeout(() => {
+        source.cancel();
+    }, 12000);
+
     try {
-        await axios.get(`${service.endpoint}:${service.port}`, { httpsAgent, maxRedirects: 0, timeout: 5000 });
+        await axios.get(`${service.endpoint}:${service.port}`, { cancelToken: source.token, httpsAgent, maxRedirects: 0, timeout: 3000 });
     } catch (error) {
         if ((error.response && error.response.status > 500) || !error.response) {
-            logger.error(error);
+            logger.error(`axios get error for ${service.endpoint}:${service.port}, ${error.code || error}`);
             service.failed = true;
         }
     }
@@ -96,7 +102,7 @@ async function pingEndpoint(service) {
     logger.info(`pingEndpoint: ${service.endpoint}`);
     try {
         const pingResult = await ping.promise.probe(service.endpoint,
-            { deadline: 15, min_reply: 3, timeout: 5, });
+            { deadline: 12, min_reply: 3, timeout: 5, });
         if (!pingResult.alive) {
             service.failed = true;
         }
@@ -115,7 +121,7 @@ async function socketEndpoint(service) {
         try {
             await new Promise((resolve, reject) => {   
                 const socket = new net.Socket();
-                socket.setTimeout(5000);
+                socket.setTimeout(3000);
                 socket.on('connect', () => {
                     socket.destroy();
                     resolve();
@@ -137,7 +143,7 @@ async function socketEndpoint(service) {
             logger.error(error);
             service.failed = true;
         }
-        await new Promise(resolve => setTimeout(resolve, (i + 1) * 2000));
+        await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
     }
 }
 
