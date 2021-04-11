@@ -11,7 +11,6 @@ const logger = require('pino')({
     level: process.env.LOG_LEVEL ? process.env.LOG_LEVEL.toLowerCase() : 'info',
 });
 const axios = require('axios');
-const axiosRetry = require('axios-retry');
 const { Datastore } = require('@google-cloud/datastore');
 const https = require('https');
 const ping = require('ping');
@@ -19,18 +18,6 @@ const datastore = new Datastore();
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 const net = require('net');
 const nodemailer = require("nodemailer");
-
-axiosRetry(axios, {
-    retries: 2,
-    retryCondition: (error) => {
-        return axiosRetry.isNetworkOrIdempotentRequestError(error)
-            || error.code === 'ECONNABORTED';
-    },
-    retryDelay: (retryCount) => {
-        logger.warn(`retry attempt: ${retryCount}`);
-        return retryCount * 1000;
-    },
-});
 
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
@@ -41,6 +28,10 @@ const transporter = nodemailer.createTransport({
         pass: process.env.SMTP_PASS
     },
 });
+
+const RETRY_COUNT = 3;
+const RETRY_BACKOFF_MS = 2000;
+const TIMEOUT_MS = 5000;
 
 // Map pino levels to GCP, https://cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry#LogSeverity
 function severity(label) {
@@ -81,18 +72,27 @@ async function getEndpoint(service) {
 
     logger.info(`getEndpoint: ${service.endpoint}:${service.port}`);
 
-    let source = axios.CancelToken.source();
-    setTimeout(() => {
-        source.cancel();
-    }, 12000);
+    for (let i = 1; i <= RETRY_COUNT; i++ ) {
+        const source = axios.CancelToken.source();
+        setTimeout(() => {
+            source.cancel();
+        }, TIMEOUT_MS);
 
-    try {
-        await axios.get(`${service.endpoint}:${service.port}`, { cancelToken: source.token, httpsAgent, maxRedirects: 0, timeout: 3000 });
-    } catch (error) {
-        if ((error.response && error.response.status > 500) || !error.response) {
-            logger.error(`axios get error for ${service.endpoint}:${service.port}, ${error.code || error}`);
-            service.failed = true;
+        try {
+            await axios.get(`${service.endpoint}:${service.port}`, { cancelToken: source.token, httpsAgent, maxRedirects: 0, timeout: 3000 });
+            service.failed = false;
+        } catch (error) {
+            if (error.response && error.response.status < 500) {
+                service.failed = false;
+            } else {
+                logger.error(`axios get error for ${service.endpoint}:${service.port}, ${error.code || error}`);
+                service.failed = true;
+            }
         }
+        if (!service.failed) {
+            break;
+        }
+        await new Promise(resolve => setTimeout(resolve, i * RETRY_BACKOFF_MS));
     }
 }
 
@@ -100,28 +100,34 @@ async function pingEndpoint(service) {
     service.failed = false;
 
     logger.info(`pingEndpoint: ${service.endpoint}`);
-    try {
-        const pingResult = await ping.promise.probe(service.endpoint,
-            { deadline: 12, min_reply: 3, timeout: 5, });
-        if (!pingResult.alive) {
+    for (let i = 1; i <= RETRY_COUNT; i++ ) {
+        try {
+            const pingResult = await ping.promise.probe(service.endpoint, { 
+                deadline: TIMEOUT_MS / 1000,
+                min_reply: RETRY_COUNT,
+                timeout: TIMEOUT_MS / 1000,
+            });
+            service.failed = !pingResult.alive;
+        } catch (error) {
+            logger.error(error);
             service.failed = true;
         }
-    } catch (error) {
-        logger.error(error);
-        service.failed = true;
+        if (!service.failed) {
+            break;
+        }
+        await new Promise(resolve => setTimeout(resolve, i * RETRY_BACKOFF_MS));
     }
 }
 
 async function socketEndpoint(service) {
     service.failed = false;
-    const attempts = 3;
 
     logger.info(`socketEndpoint: ${service.endpoint}:${service.port}`);
-    for (let i = 0; i < attempts; i++ ) {
+    for (let i = 1; i <= RETRY_COUNT; i++ ) {
         try {
             await new Promise((resolve, reject) => {   
                 const socket = new net.Socket();
-                socket.setTimeout(3000);
+                socket.setTimeout(TIMEOUT_MS);
                 socket.on('connect', () => {
                     socket.destroy();
                     resolve();
@@ -138,12 +144,14 @@ async function socketEndpoint(service) {
             }); 
 
             service.failed = false;
-            break;
         } catch (error) {
             logger.error(error);
             service.failed = true;
         }
-        await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
+        if (!service.failed) {
+            break;
+        }
+        await new Promise(resolve => setTimeout(resolve, i * RETRY_BACKOFF_MS));
     }
 }
 

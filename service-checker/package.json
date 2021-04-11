@@ -2,12 +2,11 @@
 	"name": "service-checker",
 	"version": "1.0.0",
 	"scripts": {
-		"start": "functions-framework --target=checkServices"
+		"start": "functions-framework --target=checkServices --port=8081"
 	},
 	"dependencies": {
 		"@google-cloud/datastore": "^6.3.1",
 		"axios": "^0.21.1",
-		"axios-retry": "^3.1.9",
 		"dotenv": "^8.2.0",
 		"nodemailer": "^6.5.0",
 		"ping": "^0.4.0",
